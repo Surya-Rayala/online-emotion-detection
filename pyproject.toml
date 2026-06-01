@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "online-emotion-detection"
+version = "0.1.0"
+description = "Streaming, frame-by-frame facial emotion recognition (HSEmotion) with a unified torch/torchscript/onnx/trt runtime and export-once caching for edge devices."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { file = "LICENSE" }
+keywords = ["emotion-recognition", "hsemotion", "affectnet", "streaming", "tensorrt", "onnx", "edge", "jetson"]
+authors = [{ name = "Surya Chand Rayala", email = "suryachand2k1@gmail.com" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.23",
+    "opencv-python>=4.7",
+    "tqdm>=4.65",
+]
+
+[project.optional-dependencies]
+# The default runtime + the HSEmotion model source. Install this unless on Jetson.
+torch = ["torch>=2.1", "torchvision>=0.16", "hsemotion>=0.3", "timm>=0.9"]
+onnx = ["onnxruntime>=1.16", "onnx>=1.15", "onnxsim>=0.4.33"]
+trt = ["tensorrt>=8.6"]
+# Host the model over HTTP (uniform contract). Adds no torch beyond the runtime extra.
+serve = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9"]
+# Talk to a remote service. Torch-free: numpy/opencv (core) + requests only.
+client = ["requests>=2.31"]
+dev = ["pytest>=7.4", "ruff>=0.4", "mypy>=1.8"]
+
+[project.scripts]
+online-emotion = "online_emotion.cli.run:main"
+online-emotion-export = "online_emotion.cli.export:main"
+online-emotion-serve = "online_emotion.serve:main"
+
+[project.urls]
+Homepage = "https://github.com/Surya-Rayala/online-emotion-detection"
+Repository = "https://github.com/Surya-Rayala/online-emotion-detection"
+Issues = "https://github.com/Surya-Rayala/online-emotion-detection/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["online_emotion"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
