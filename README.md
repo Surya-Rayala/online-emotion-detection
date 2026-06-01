@@ -136,16 +136,31 @@ just adds those packages (it won't reinstall torch). Install several at once:
 |-------|------|---------------------------|
 | `[torch]` | torch, torchvision, hsemotion, timm | **default** runtime + model weights |
 | `[onnx]`  | onnxruntime, onnx, onnxsim | run or export the ONNX backend |
-| `[trt]`   | tensorrt (also pulls `[onnx]`) | build/run TensorRT engines on NVIDIA. Needs a **CUDA build of torch** with torch + tensorrt + CUDA on the **same version** (e.g. cu12). Jetson: use JetPack's TensorRT ([below](#jetson-jetpack)) |
+| `[trt]`   | tensorrt (also pulls `[onnx]`) | build/run TensorRT engines on NVIDIA — **see the TensorRT note below** |
 | `[serve]` | fastapi, uvicorn, python-multipart | host the model as an HTTP service (below) |
 | `[client]` | requests | call a remote service (torch-free, below) |
 
 **Which do I actually need?**
 - `pip install online-emotion-detection` (no `[...]`) → **core only** (numpy/opencv); **no runtime, can't run inference**. Use this only when torch is provided another way (e.g. Jetson/JetPack wheels).
 - `[torch]` → the **foundation**; required to run the model locally (CPU/CUDA/MPS) and it pulls the model weights. Start here.
-- `[onnx]` / `[trt]` → **add** a backend *on top of* torch (they don't replace it). `[trt]` also pulls `[onnx]` and needs a matching **CUDA build of torch** (see the table). Install together: `pip install "online-emotion-detection[torch,trt]"`.
+- `[onnx]` / `[trt]` → **add** a backend *on top of* torch (they don't replace it). `[trt]` also pulls `[onnx]`; for TensorRT you also need a matching **CUDA build of torch** — **see the note below**.
 - `[serve]` → runs the model in-process, so it needs torch too: `pip install "online-emotion-detection[torch,serve]"`.
 - `[client]` → the **only torch-free** one — it just calls a remote service, so `pip install "online-emotion-detection[client]"` **alone is enough**.
+
+> [!CAUTION]
+> **TensorRT setup — `[trt]` alone is not enough.** It installs the bindings; you still need a matching CUDA + a CUDA build of torch. On an NVIDIA machine:
+> 1. **Check your CUDA:** run `nvidia-smi` and note the **CUDA Version** it reports (your GPU/driver's CUDA). No NVIDIA GPU → use `[onnx]`/`[torch]` instead.
+> 2. **Check torch matches:** `python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"`. You need a **CUDA build of torch ≥ 2.1** whose CUDA matches step 1 and prints `True`. If not, reinstall it for your CUDA:
+>    ```bash
+>    pip uninstall -y torch torchvision
+>    # pick the matching command from https://pytorch.org/get-started/previous-versions/  (example: CUDA 12.1)
+>    pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
+>    ```
+> 3. **Install the package** — `[trt]` then installs TensorRT (+ our ONNX export path):
+>    ```bash
+>    pip install "online-emotion-detection[trt]"
+>    ```
+> On **Jetson**, skip this — TensorRT ships with JetPack (see [Jetson](#jetson-jetpack)).
 
 ---
 
