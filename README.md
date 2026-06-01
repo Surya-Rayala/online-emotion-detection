@@ -136,14 +136,14 @@ just adds those packages (it won't reinstall torch). Install several at once:
 |-------|------|---------------------------|
 | `[torch]` | torch, torchvision, hsemotion, timm | **default** runtime + model weights |
 | `[onnx]`  | onnxruntime, onnx, onnxsim | run or export the ONNX backend |
-| `[trt]`   | tensorrt | build/run TensorRT engines (NVIDIA) |
+| `[trt]`   | tensorrt (also pulls `[onnx]`) | build/run TensorRT engines on NVIDIA. Needs a **CUDA build of torch** with torch + tensorrt + CUDA on the **same version** (e.g. cu12). Jetson: use JetPack's TensorRT ([below](#jetson-jetpack)) |
 | `[serve]` | fastapi, uvicorn, python-multipart | host the model as an HTTP service (below) |
 | `[client]` | requests | call a remote service (torch-free, below) |
 
 **Which do I actually need?**
 - `pip install online-emotion-detection` (no `[...]`) → **core only** (numpy/opencv); **no runtime, can't run inference**. Use this only when torch is provided another way (e.g. Jetson/JetPack wheels).
 - `[torch]` → the **foundation**; required to run the model locally (CPU/CUDA/MPS) and it pulls the model weights. Start here.
-- `[onnx]` / `[trt]` → **add** a backend *on top of* torch (they don't replace it). Install together: `pip install "online-emotion-detection[torch,onnx]"`.
+- `[onnx]` / `[trt]` → **add** a backend *on top of* torch (they don't replace it). `[trt]` also pulls `[onnx]` and needs a matching **CUDA build of torch** (see the table). Install together: `pip install "online-emotion-detection[torch,trt]"`.
 - `[serve]` → runs the model in-process, so it needs torch too: `pip install "online-emotion-detection[torch,serve]"`.
 - `[client]` → the **only torch-free** one — it just calls a remote service, so `pip install "online-emotion-detection[client]"` **alone is enough**.
 
