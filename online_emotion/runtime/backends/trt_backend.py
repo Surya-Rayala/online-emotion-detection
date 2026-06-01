@@ -33,6 +33,14 @@ class TensorRTBackend(Backend):
                 self.input_name = name
             else:
                 self.output_names.append(name)
+        # Honor a dynamic batch profile: engines exported with a min/opt/max batch report a
+        # -1 batch dim, so all faces in a frame run in ONE batched call instead of per-item.
+        # (If a batched infer ever errors on-device, streaming._infer falls back to per-item.)
+        try:
+            ishape = self.engine.get_tensor_shape(self.input_name)
+            self.supports_dynamic_batch = bool(len(ishape) and int(ishape[0]) == -1)
+        except Exception:
+            self.supports_dynamic_batch = False
 
     def infer(self, x):
         import torch

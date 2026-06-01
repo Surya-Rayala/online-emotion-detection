@@ -20,13 +20,16 @@ def load_hsemotion_module(model_name: str):
             "the 'hsemotion' package is required: pip install 'online-emotion-detection[torch]'"
         ) from e
 
-    # hsemotion ships pickled full models and calls torch.load without weights_only.
-    # torch>=2.6 defaults weights_only=True, which rejects them. Force False while
-    # loading this explicitly-installed, trusted checkpoint.
+    # hsemotion ships pickled full models and calls torch.load without weights_only or
+    # map_location. torch>=2.6 defaults weights_only=True (rejects them), and some
+    # checkpoints (e.g. enet_b2_8) were saved with CUDA tensors, so loading them on a
+    # CPU/MPS box raises "deserialize on a CUDA device". Force both while loading this
+    # explicitly-installed, trusted checkpoint; the module is moved to the real device after.
     _orig_load = torch.load
 
     def _compat_load(*a, **k):
         k.setdefault("weights_only", False)
+        k.setdefault("map_location", "cpu")
         return _orig_load(*a, **k)
 
     torch.load = _compat_load
