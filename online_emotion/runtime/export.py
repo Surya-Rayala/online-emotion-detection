@@ -94,10 +94,19 @@ def onnx_to_trt(onnx_path: Path, engine_path: Path, *, precision: str = "fp16",
             raise ExportError(f"onnx->trt parse failed: {errs}")
 
     config = builder.create_builder_config()
-    config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, int(workspace_gb * (1 << 30)))
-    # TensorRT 10 removed builder.platform_has_fast_fp16; any TRT-10-capable GPU has fast fp16.
-    if precision == "fp16" and getattr(builder, "platform_has_fast_fp16", True):
-        config.set_flag(trt.BuilderFlag.FP16)
+    # Workspace limit: set_memory_pool_limit is TRT 8.4+/10; older builds use max_workspace_size.
+    _workspace = int(workspace_gb * (1 << 30))
+    _pool = getattr(trt, "MemoryPoolType", None)
+    if hasattr(config, "set_memory_pool_limit") and _pool is not None:
+        config.set_memory_pool_limit(_pool.WORKSPACE, _workspace)
+    elif hasattr(config, "max_workspace_size"):
+        config.max_workspace_size = _workspace
+    # TRT 10 removed builder.platform_has_fast_fp16; TRT 10.12+ removed BuilderFlag.FP16 too
+    # (precision is via strong typing there). Set the fp16 compute flag only when both still exist;
+    # either way the engine I/O stays the onnx dtype and the runtime reads the engine's real dtypes.
+    _fp16_flag = getattr(trt.BuilderFlag, "FP16", None)
+    if precision == "fp16" and _fp16_flag is not None and getattr(builder, "platform_has_fast_fp16", True):
+        config.set_flag(_fp16_flag)
     if min_shape is not None:
         profile = builder.create_optimization_profile()
         profile.set_shape(input_name, tuple(min_shape), tuple(opt_shape or min_shape), tuple(max_shape or min_shape))
@@ -105,6 +114,7 @@ def onnx_to_trt(onnx_path: Path, engine_path: Path, *, precision: str = "fp16",
 
     serialized = builder.build_serialized_network(network, config)
     if serialized is None:
-        raise ExportError("tensorrt engine build returned None")
-    Path(engine_path).write_bytes(serialized)
+        raise ExportError("tensorrt engine build returned None (see the TensorRT log above; "
+                          "usually a driver/CUDA mismatch or an unsupported op)")
+    Path(engine_path).write_bytes(bytes(serialized))   # IHostMemory -> bytes (portable across TRT versions)
     return engine_path

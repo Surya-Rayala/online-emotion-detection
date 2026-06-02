@@ -42,17 +42,26 @@ class TensorRTBackend(Backend):
         except Exception:
             self.supports_dynamic_batch = False
 
+    def _torch_dtype(self, name):
+        import torch
+
+        dt = self.engine.get_tensor_dtype(name)
+        return {self._trt.DataType.HALF: torch.float16,
+                self._trt.DataType.FLOAT: torch.float32,
+                self._trt.DataType.INT32: torch.int32}.get(dt, torch.float32)
+
     def infer(self, x):
         import torch
 
-        dtype = torch.float16 if self.precision == "fp16" else torch.float32
-        x = x.to(self.device, dtype=dtype).contiguous()
+        # Feed/read the engine's ACTUAL binding dtypes (a standard fp16-flag engine still has fp32 I/O;
+        # a strongly-typed engine may have fp16) — don't assume from precision.
+        x = x.to(self.device, dtype=self._torch_dtype(self.input_name)).contiguous()
         self.context.set_input_shape(self.input_name, tuple(x.shape))
         self.context.set_tensor_address(self.input_name, x.data_ptr())
         outputs = []
         for name in self.output_names:
             shape = tuple(self.context.get_tensor_shape(name))
-            buf = torch.empty(shape, device=self.device, dtype=dtype)
+            buf = torch.empty(shape, device=self.device, dtype=self._torch_dtype(name))
             outputs.append(buf)
             self.context.set_tensor_address(name, buf.data_ptr())
         stream = torch.cuda.current_stream()
