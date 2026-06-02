@@ -84,7 +84,9 @@ def onnx_to_trt(onnx_path: Path, engine_path: Path, *, precision: str = "fp16",
             "the CUDA version the installed 'tensorrt' wheel needs. Update your NVIDIA driver (or install "
             "a tensorrt build matching your driver's CUDA). See the TensorRT note in the README."
         ) from e
-    network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+    # TensorRT 10 removed the EXPLICIT_BATCH flag (explicit batch is the default now); TRT 8 needs it.
+    _eb = getattr(trt.NetworkDefinitionCreationFlag, "EXPLICIT_BATCH", None)
+    network = builder.create_network(1 << int(_eb) if _eb is not None else 0)
     parser = trt.OnnxParser(network, logger)
     with open(onnx_path, "rb") as f:
         if not parser.parse(f.read()):
@@ -93,7 +95,8 @@ def onnx_to_trt(onnx_path: Path, engine_path: Path, *, precision: str = "fp16",
 
     config = builder.create_builder_config()
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, int(workspace_gb * (1 << 30)))
-    if precision == "fp16" and builder.platform_has_fast_fp16:
+    # TensorRT 10 removed builder.platform_has_fast_fp16; any TRT-10-capable GPU has fast fp16.
+    if precision == "fp16" and getattr(builder, "platform_has_fast_fp16", True):
         config.set_flag(trt.BuilderFlag.FP16)
     if min_shape is not None:
         profile = builder.create_optimization_profile()

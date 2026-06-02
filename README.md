@@ -156,11 +156,12 @@ just adds those packages (it won't reinstall torch). Install several at once:
 >    # pick the matching command from https://pytorch.org/get-started/previous-versions/  (example: CUDA 12.1)
 >    pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
 >    ```
-> 3. **Install the package** — `[trt]` then installs TensorRT (+ our ONNX export path):
+> 3. **Install TensorRT for your CUDA** following NVIDIA's official guide — pick the build matching step 1, don't rely on a default: <https://docs.nvidia.com/deeplearning/tensorrt/latest/installing-tensorrt/install-pip.html>
+> 4. **Then install this package:**
 >    ```bash
->    pip install "online-emotion-detection[trt]"
+>    pip install "online-emotion-detection[trt]"   # adds our ONNX export path; uses the TensorRT from step 3
 >    ```
-> On **Jetson**, skip this — TensorRT ships with JetPack (see [Jetson](#jetson-jetpack)).
+> On **Jetson**, skip all this — TensorRT ships with JetPack (see [Jetson](#jetson-jetpack)).
 
 ---
 
