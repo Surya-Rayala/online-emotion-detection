@@ -64,7 +64,12 @@ class TensorRTBackend(Backend):
             buf = torch.empty(shape, device=self.device, dtype=self._torch_dtype(name))
             outputs.append(buf)
             self.context.set_tensor_address(name, buf.data_ptr())
-        stream = torch.cuda.current_stream()
-        self.context.execute_async_v3(stream_handle=stream.cuda_stream)
-        stream.synchronize()
+        # Run on a dedicated (non-default) stream: TRT warns that the default stream forces extra
+        # cudaStreamSynchronize calls. wait_stream ensures the inputs/outputs (prepared on the current
+        # stream) are ready before TRT reads them; synchronize makes outputs ready for postprocess.
+        if getattr(self, "_stream", None) is None:
+            self._stream = torch.cuda.Stream(device=self.device)
+        self._stream.wait_stream(torch.cuda.current_stream(self.device))
+        self.context.execute_async_v3(stream_handle=self._stream.cuda_stream)
+        self._stream.synchronize()
         return tuple(o.float() for o in outputs)

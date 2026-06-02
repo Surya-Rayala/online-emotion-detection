@@ -65,6 +65,27 @@ def to_onnx(module, example_input, out_path: Path, *, input_names: Sequence[str]
     return out_path
 
 
+def _onnx_to_fp16(onnx_path: Path) -> Optional[Path]:
+    """Convert an fp32 ONNX to fp16 for TensorRT *strong typing* (TRT 10.12+). Keeps fp32 I/O
+    (compute becomes fp16) so the runtime feeds fp32 just like a weak-typed fp16 engine. Returns
+    the new path, or None when conversion isn't possible (then we build an fp32 engine)."""
+    try:
+        import onnx
+        from onnxconverter_common import float16
+    except Exception:
+        _log.warning("an fp16 TensorRT engine needs onnxconverter-common (shipped in the [trt] extra); "
+                     "building an fp32 engine instead")
+        return None
+    try:
+        model16 = float16.convert_float_to_float16(onnx.load(str(onnx_path)), keep_io_types=True)
+        out = onnx_path.with_name(onnx_path.stem + "_fp16.onnx")
+        onnx.save(model16, str(out))
+        return out
+    except Exception as e:  # pragma: no cover - model-specific
+        _log.warning("fp16 onnx conversion failed (%s); building an fp32 engine", e)
+        return None
+
+
 def onnx_to_trt(onnx_path: Path, engine_path: Path, *, precision: str = "fp16",
                 workspace_gb: float = 4.0, input_name: str = "input",
                 min_shape: Optional[Sequence[int]] = None,
@@ -84,11 +105,32 @@ def onnx_to_trt(onnx_path: Path, engine_path: Path, *, precision: str = "fp16",
             "the CUDA version the installed 'tensorrt' wheel needs. Update your NVIDIA driver (or install "
             "a tensorrt build matching your driver's CUDA). See the TensorRT note in the README."
         ) from e
-    # TensorRT 10 removed the EXPLICIT_BATCH flag (explicit batch is the default now); TRT 8 needs it.
-    _eb = getattr(trt.NetworkDefinitionCreationFlag, "EXPLICIT_BATCH", None)
-    network = builder.create_network(1 << int(_eb) if _eb is not None else 0)
+
+    # Pick the FP16 route by what THIS TensorRT supports, so we get fp16 perf on every version:
+    #   * weak typing (TRT < 10.12): build from the fp32 onnx + set BuilderFlag.FP16.
+    #   * strong typing (TRT 10.12+ dropped the flag): STRONGLY_TYPED network from an fp16 onnx.
+    # Both end up fp16-compute with fp32 I/O; if neither is possible we build a (working) fp32 engine.
+    want_fp16 = precision == "fp16"
+    fp16_flag = getattr(trt.BuilderFlag, "FP16", None)
+    st_flag = getattr(trt.NetworkDefinitionCreationFlag, "STRONGLY_TYPED", None)
+    eb_flag = getattr(trt.NetworkDefinitionCreationFlag, "EXPLICIT_BATCH", None)
+
+    use_strong = bool(want_fp16 and fp16_flag is None and st_flag is not None)
+    onnx_for_build = onnx_path
+    if use_strong:
+        fp16_onnx = _onnx_to_fp16(onnx_path)
+        if fp16_onnx is not None:
+            onnx_for_build = fp16_onnx
+        else:
+            use_strong = False  # couldn't make an fp16 onnx -> fall back to an fp32 engine
+
+    if use_strong:
+        network = builder.create_network(1 << int(st_flag))            # explicit batch implied
+    else:
+        network = builder.create_network(1 << int(eb_flag) if eb_flag is not None else 0)
+
     parser = trt.OnnxParser(network, logger)
-    with open(onnx_path, "rb") as f:
+    with open(onnx_for_build, "rb") as f:
         if not parser.parse(f.read()):
             errs = "; ".join(str(parser.get_error(i)) for i in range(parser.num_errors))
             raise ExportError(f"onnx->trt parse failed: {errs}")
@@ -101,12 +143,10 @@ def onnx_to_trt(onnx_path: Path, engine_path: Path, *, precision: str = "fp16",
         config.set_memory_pool_limit(_pool.WORKSPACE, _workspace)
     elif hasattr(config, "max_workspace_size"):
         config.max_workspace_size = _workspace
-    # TRT 10 removed builder.platform_has_fast_fp16; TRT 10.12+ removed BuilderFlag.FP16 too
-    # (precision is via strong typing there). Set the fp16 compute flag only when both still exist;
-    # either way the engine I/O stays the onnx dtype and the runtime reads the engine's real dtypes.
-    _fp16_flag = getattr(trt.BuilderFlag, "FP16", None)
-    if precision == "fp16" and _fp16_flag is not None and getattr(builder, "platform_has_fast_fp16", True):
-        config.set_flag(_fp16_flag)
+    # Weak-typing fp16 flag (TRT < 10.12). Strong-typed engines get fp16 from the onnx, so no flag.
+    if want_fp16 and not use_strong and fp16_flag is not None and getattr(builder, "platform_has_fast_fp16", True):
+        config.set_flag(fp16_flag)
+
     if min_shape is not None:
         profile = builder.create_optimization_profile()
         profile.set_shape(input_name, tuple(min_shape), tuple(opt_shape or min_shape), tuple(max_shape or min_shape))
