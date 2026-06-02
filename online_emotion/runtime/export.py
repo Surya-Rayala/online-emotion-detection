@@ -72,9 +72,9 @@ def _onnx_to_fp16(onnx_path: Path) -> Optional[Path]:
     try:
         import onnx
         from onnxconverter_common import float16
-    except Exception:
-        _log.warning("an fp16 TensorRT engine needs onnxconverter-common (shipped in the [trt] extra); "
-                     "building an fp32 engine instead")
+    except Exception as e:
+        _log.warning("fp16 TensorRT engine needs onnxconverter-common (in the [trt] extra) — import "
+                     "failed: %s; building an fp32 engine instead", e)
         return None
     try:
         model16 = float16.convert_float_to_float16(onnx.load(str(onnx_path)), keep_io_types=True)
@@ -94,7 +94,11 @@ def onnx_to_trt(onnx_path: Path, engine_path: Path, *, precision: str = "fp16",
     try:
         import tensorrt as trt
     except Exception as e:  # pragma: no cover
-        raise ExportError("tensorrt is not installed; install the [trt] extra on the target device") from e
+        raise ExportError(
+            "TensorRT is not installed. The [trt] extra intentionally does not install it (the wheel must "
+            "match your CUDA) — install TensorRT for your CUDA per NVIDIA's guide, then it's used "
+            "automatically: https://docs.nvidia.com/deeplearning/tensorrt/latest/installing-tensorrt/install-pip.html"
+        ) from e
 
     logger = trt.Logger(trt.Logger.WARNING)
     try:

@@ -136,19 +136,19 @@ just adds those packages (it won't reinstall torch). Install several at once:
 |-------|------|---------------------------|
 | `[torch]` | torch, torchvision, hsemotion, timm | **default** runtime + model weights |
 | `[onnx]`  | onnxruntime, onnx, onnxsim | run or export the ONNX backend |
-| `[trt]`   | tensorrt (also pulls `[onnx]`) | build/run TensorRT engines on NVIDIA — **see the TensorRT note below** |
+| `[trt]`   | our ONNX export path + fp16 converter (**not** tensorrt) | run the TensorRT backend — install TensorRT yourself first, **see the note below** |
 | `[serve]` | fastapi, uvicorn, python-multipart | host the model as an HTTP service (below) |
 | `[client]` | requests | call a remote service (torch-free, below) |
 
 **Which do I actually need?**
 - `pip install online-emotion-detection` (no `[...]`) → **core only** (numpy/opencv); **no runtime, can't run inference**. Use this only when torch is provided another way (e.g. Jetson/JetPack wheels).
 - `[torch]` → the **foundation**; required to run the model locally (CPU/CUDA/MPS) and it pulls the model weights. Start here.
-- `[onnx]` / `[trt]` → **add** a backend *on top of* torch (they don't replace it). `[trt]` also pulls `[onnx]`; for TensorRT you also need a matching **CUDA build of torch** — **see the note below**.
+- `[onnx]` / `[trt]` → **add** a backend *on top of* torch (they don't replace it). `[trt]` pulls `[onnx]` + an fp16 converter but **not tensorrt** — install TensorRT for your CUDA yourself (see the note below).
 - `[serve]` → runs the model in-process, so it needs torch too: `pip install "online-emotion-detection[torch,serve]"`.
 - `[client]` → the **only torch-free** one — it just calls a remote service, so `pip install "online-emotion-detection[client]"` **alone is enough**.
 
 > [!CAUTION]
-> **TensorRT setup — `[trt]` alone is not enough.** It installs the bindings; you still need a matching CUDA + a CUDA build of torch. On an NVIDIA machine:
+> **TensorRT setup.** `[trt]` adds our ONNX export path + fp16 converter but **does not install TensorRT** — its PyPI wheel always grabs the newest CUDA build (e.g. cu13), which won't match your system. Install TensorRT yourself (plus a matching CUDA build of torch). On an NVIDIA machine:
 > 1. **Check your CUDA:** run `nvidia-smi` and note the **CUDA Version** it reports (your GPU/driver's CUDA). No NVIDIA GPU → use `[onnx]`/`[torch]` instead.
 > 2. **Check torch matches:** `python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"`. You need a **CUDA build of torch ≥ 2.1** whose CUDA matches step 1 and prints `True`. If not, reinstall it for your CUDA:
 >    ```bash
