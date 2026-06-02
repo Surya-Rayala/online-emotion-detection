@@ -16,6 +16,11 @@ class TorchScriptBackend(Backend):
 
         self.module = torch.jit.load(str(Path(path)), map_location=device).eval()
         self._half = precision == "fp16"
+        if self._half:
+            try:
+                self.module = self.module.half()   # match fp16 input to fp16 weights (CUDA)
+            except Exception:
+                self._half = False
 
     def infer(self, x):
         import torch

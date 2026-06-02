@@ -76,7 +76,14 @@ def onnx_to_trt(onnx_path: Path, engine_path: Path, *, precision: str = "fp16",
         raise ExportError("tensorrt is not installed; install the [trt] extra on the target device") from e
 
     logger = trt.Logger(trt.Logger.WARNING)
-    builder = trt.Builder(logger)
+    try:
+        builder = trt.Builder(logger)
+    except Exception as e:  # pybind returns nullptr when CUDA can't init (e.g. driver too old)
+        raise ExportError(
+            "TensorRT could not initialize CUDA. This usually means the NVIDIA driver is older than "
+            "the CUDA version the installed 'tensorrt' wheel needs. Update your NVIDIA driver (or install "
+            "a tensorrt build matching your driver's CUDA). See the TensorRT note in the README."
+        ) from e
     network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
     parser = trt.OnnxParser(network, logger)
     with open(onnx_path, "rb") as f:
