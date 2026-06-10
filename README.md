@@ -149,7 +149,7 @@ just adds those packages (it won't reinstall torch). Install several at once:
 
 > [!CAUTION]
 > **TensorRT setup.** `[trt]` adds our ONNX export path + fp16 converter but **does not install TensorRT** — its PyPI wheel always grabs the newest CUDA build (e.g. cu13), which won't match your system. Install TensorRT yourself (plus a matching CUDA build of torch). On an NVIDIA machine:
-> 1. **Check your CUDA:** run `nvidia-smi` and note the **CUDA Version** it reports (your GPU/driver's CUDA). No NVIDIA GPU → use `[onnx]`/`[torch]` instead.
+> 1. **Check your CUDA toolkit:** run `nvcc --version` and note the **release** it reports (e.g. `release 12.1`) — that's your installed CUDA toolkit, the version everything below must match. If `nvcc` isn't found, the toolkit isn't installed (install it, or use `[onnx]`/`[torch]` instead).
 > 2. **Check torch matches:** `python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"`. You need a **CUDA build of torch ≥ 2.1** whose CUDA matches step 1 and prints `True`. If not, reinstall it for your CUDA:
 >    ```bash
 >    pip uninstall -y torch torchvision
