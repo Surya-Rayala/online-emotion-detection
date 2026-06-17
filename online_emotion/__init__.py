@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = ["EmotionRecognizer", "EmotionResult", "EmotionFrameResult",
            "available_models", "available_weights", "__version__"]

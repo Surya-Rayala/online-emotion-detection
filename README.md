@@ -192,47 +192,46 @@ online-emotion-serve --model hsemotion --device auto --runtime auto --host 127.0
 curl http://127.0.0.1:8002/meta
 ```
 
-**Call it from another process** with the torch-free `[client]` proxy (mirrors `predict_on_boxes`):
+### Client — `[client]` proxy (torch-free: numpy/opencv + requests + websockets)
 
 ```bash
 pip install "online-emotion-detection[client]"
 ```
+
 ```python
 from online_emotion.client import EmotionClient
 
 emo = EmotionClient(
-    "http://127.0.0.1:8002",   # the service URL (local or cloud)
+    "http://127.0.0.1:8002",   # service URL (local or cloud)
     encode="jpeg",             # wire format (default): "jpeg" (small, no measurable accuracy loss) | "png" (lossless)
     quality=90,                # JPEG quality (ignored for png)
-    max_side=None,             # if set, downscale frame before sending (predict_on_boxes path); boxes are scaled to match
-    timeout=30,                # request timeout, seconds
+    max_side=None,             # downscale frame before sending on the predict_on_boxes path; boxes scaled to match
+    timeout=30,
 )
-res = emo.predict_on_boxes(frame, boxes)              # res.emotions[i].label / .score
-# Or the efficient path — send only the face crops, never the whole frame again:
-res = emo.predict_on_crops(EmotionClient.crop_boxes(frame, boxes))
-emo.meta()                                            # the service's /meta;  emo.healthz() -> readiness
 ```
 
-### Performance & efficiency
+| Function | What it does | Use when |
+|----------|--------------|----------|
+| `emo.predict_on_boxes(frame, boxes, max_side=…)` | sends the **whole frame** + boxes; server crops | you already have the frame at the service and want the simplest call |
+| `EmotionClient.crop_boxes(frame, boxes)` → `emo.predict_on_crops(crops)` | sends **only the small face crops** (payload scales with #faces, not resolution) | the efficient default for remote/LAN; avoids re-sending the whole frame |
+| `emo.predict_on_crops_stream(crop_lists, max_workers=K)` / `emo.predict_on_boxes_stream(items, max_workers=K)` | **K requests in flight** over keep-alive HTTP; yields results **in input order** | one stream over a network where round-trip latency would stall you |
+| `EmotionStreamClient(url, max_inflight=K).predict_stream(crop_lists)` (or `.predict_on_boxes_stream((frame, boxes) pairs)`) | same, over a **persistent WebSocket** `/stream` | one long-lived/remote stream; lowest per-frame overhead |
+| `emo.healthz()` / `emo.meta()` | readiness / service contract (incl. class list) | startup checks |
 
-The HTTP cost is wire encode + transfer + decode + JSON, not the model. Knobs:
+`crop_boxes` is a static helper (pure numpy slicing); each result list maps **crop i → emotion i**. `encode="jpeg"` (default) is far smaller than PNG with no measurable accuracy loss (crops are resized to 224²).
 
-| Knob | Effect |
-|------|--------|
-| `encode="jpeg"`, `quality=90` | default; far smaller/faster than PNG with no measurable accuracy loss (crops are resized to 224², smoothing JPEG artifacts) |
-| `predict_on_crops(...)` / `crop_boxes(...)` | send only small face crops instead of the full frame + boxes — payload scales with the number/size of faces, not frame resolution |
-| `predict_on_crops_stream(...)` / `predict_on_boxes_stream(...)` | overlap the hop across frames over keep-alive; results in input order |
-| `EmotionStreamClient(...).predict_stream(crop_lists, max_inflight=K)` | persistent WebSocket `/stream` (crops only); best for remote/WAN |
+### Single stream vs many streams (where `K` workers matter)
 
-**Pick a workflow by where the service runs:**
-- **Same device** — use the in-process `EmotionRecognizer` directly (it crops on-device).
-- **LAN** — `EmotionClient(encode="jpeg")` + `predict_on_crops`.
-- **Remote / WAN** — `EmotionStreamClient` over `/stream` with `max_inflight`.
+The server is **single-process, single-model** (`workers=1`): it accepts many connections at once, but inference runs **sequentially** on one device. So:
+
+- **Same device** — skip HTTP; call the in-process `EmotionRecognizer` directly (it crops on-device).
+- **One stream, same host / LAN** — plain `emo.predict_on_crops(...)`; the keep-alive `Session` pools the connection. `K=1` is enough.
+- **One stream, remote (RTT-bound)** — use the `*_stream` methods or `EmotionStreamClient` with **`K ≈ round-trip-time ÷ per-frame server time`, capped ~2–4**, to keep the sequential server busy during the network hop. Higher won't help.
+- **Many simultaneous streams** — one client/connection **per stream**, run concurrently from your app; keep each stream's `K` small (1–2). Aggregate throughput is bounded by the one model — scale past it with **multiple server instances** (one per GPU / replicas behind a balancer), sharding streams across them.
 
 ### Composing face → emotion (no combined package)
 
-The two packages stay independent — there is intentionally no combined package; the
-glue is two lines of your code.
+The two packages stay independent — there is intentionally no combined package; the glue is two lines of your code.
 
 ```python
 # In-process (same device) — fastest; crops never leave the device:
@@ -241,15 +240,13 @@ from online_emotion import EmotionRecognizer
 det, emo = FaceDetector("retinaface"), EmotionRecognizer("hsemotion")
 r = det(frame); emotions = emo.predict_on_boxes(frame, r.boxes)
 
-# Over the wire (two services) — send only face crops to emotion, not the frame twice:
+# Over the wire (two services) — send only face crops to emotion, not the whole frame twice:
 from online_face.client import FaceClient
 from online_emotion.client import EmotionClient
 face, emo = FaceClient(FACE_URL), EmotionClient(EMO_URL)
 r = face(frame)
 emotions = emo.predict_on_crops(EmotionClient.crop_boxes(frame, r.boxes))
 ```
-
-See **[../testing-pipeline](../testing-pipeline)** for a ready-to-run example.
 
 ---
 
