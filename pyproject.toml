@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "online-emotion-detection"
-version = "0.1.8"
+version = "0.2.0"
 description = "Streaming, frame-by-frame facial emotion recognition (HSEmotion) with a unified torch/torchscript/onnx/trt runtime and export-once caching for edge devices."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -39,8 +39,9 @@ onnx = ["onnxruntime>=1.16", "onnx>=1.15", "onnxsim>=0.4.33"]
 trt = ["online-emotion-detection[onnx]", "onnxconverter-common>=1.13"]
 # Host the model over HTTP (uniform contract). Adds no torch beyond the runtime extra.
 serve = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9"]
-# Talk to a remote service. Torch-free: numpy/opencv (core) + requests only.
-client = ["requests>=2.31"]
+# Talk to a remote service. Torch-free: numpy/opencv (core) + requests + websockets.
+# requests powers the unary/pipelined clients; websockets powers EmotionStreamClient.
+client = ["requests>=2.31", "websockets>=12"]
 dev = ["pytest>=7.4", "ruff>=0.4", "mypy>=1.8"]
 
 [project.scripts]

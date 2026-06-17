@@ -31,8 +31,9 @@ def create_app(model: str = "hsemotion", *, weights=None, runtime: str = "auto",
                device: str = "auto", precision: str = "auto", batch_max: int = 32,
                input_size=None):
     """Build a FastAPI app wrapping one eagerly-constructed ``EmotionRecognizer``."""
-    from fastapi import FastAPI, Request
+    from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import JSONResponse
+    from starlette.concurrency import run_in_threadpool
 
     import numpy as np
 
@@ -49,7 +50,17 @@ def create_app(model: str = "hsemotion", *, weights=None, runtime: str = "auto",
         cfg = emo.config
         return {"name": "online_emotion", "modality": "vision", "model": model,
                 "runtime": cfg.runtime, "device": cfg.device,
-                "inputs": _INPUTS, "outputs": _OUTPUTS, "classes": list(emo.classes)}
+                "inputs": _INPUTS, "outputs": _OUTPUTS, "classes": list(emo.classes),
+                # /predict_crops takes pre-cropped face images directly (one repeated
+                # "crops" image part each) — avoids sending the full frame a second time.
+                "paths": ["/predict", "/predict_crops"]}
+
+    def _emotions_payload(res) -> list:
+        return [{"label": e.label, "score": float(e.probs.max()),
+                 "label_index": int(e.label_index),
+                 "valence": (None if e.valence is None else float(e.valence)),
+                 "arousal": (None if e.arousal is None else float(e.arousal))}
+                for e in res.emotions]
 
     @app.get("/meta")
     def meta() -> Dict[str, Any]:
@@ -75,13 +86,45 @@ def create_app(model: str = "hsemotion", *, weights=None, runtime: str = "auto",
             return JSONResponse({"error": "missing required input 'frame'"}, status_code=422)
         boxes = np.asarray(inputs.get("boxes", []), dtype="float32").reshape(-1, 4)
         res = emo.predict_on_boxes(inputs["frame"], boxes)
-        emotions = [{"label": e.label, "score": float(e.probs.max()),
-                     "label_index": int(e.label_index),
-                     "valence": (None if e.valence is None else float(e.valence)),
-                     "arousal": (None if e.arousal is None else float(e.arousal))}
-                    for e in res.emotions]
-        return {"outputs": {"emotions": emotions, "classes": list(res.classes)},
+        return {"outputs": {"emotions": _emotions_payload(res), "classes": list(res.classes)},
                 "stats": emo.stats.as_dict()}
+
+    @app.post("/predict_crops")
+    async def predict_crops(request: Request):
+        """Pre-cropped faces in (one repeated ``crops`` image part each) -> emotions.
+
+        Lets an orchestrator crop client-side and send only the small face regions
+        instead of the whole frame a second time. Crop i -> emotion i (positional).
+        """
+        form = await request.form()
+        crops = [_wire.decode_part(getattr(p, "content_type", None), await p.read())
+                 for p in form.getlist("crops") if hasattr(p, "read")]
+        if not crops:
+            return {"outputs": {"emotions": [], "classes": list(emo.classes)},
+                    "stats": emo.stats.as_dict()}
+        res = emo(crops)
+        return {"outputs": {"emotions": _emotions_payload(res), "classes": list(res.classes)},
+                "stats": emo.stats.as_dict()}
+
+    @app.websocket("/stream")
+    async def stream(ws: WebSocket):
+        """Persistent crops path: per frame, a JSON control message ``{"n": K}``
+        then K binary crop messages; the reply is one JSON ``{"outputs": {...}}``.
+        FIFO replies; inference runs in a threadpool so it never blocks the loop."""
+        await ws.accept()
+        try:
+            while True:
+                ctrl = await ws.receive_json()
+                k = int(ctrl.get("n", 0))
+                crops = [_wire.decode_image(await ws.receive_bytes()) for _ in range(k)]
+                if crops:
+                    res = await run_in_threadpool(emo, crops)
+                    payload = {"emotions": _emotions_payload(res), "classes": list(res.classes)}
+                else:
+                    payload = {"emotions": [], "classes": list(emo.classes)}
+                await ws.send_json({"outputs": payload})
+        except WebSocketDisconnect:
+            return
 
     return app
 

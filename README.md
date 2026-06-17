@@ -185,6 +185,8 @@ online-emotion-serve --model hsemotion --device auto --runtime auto --host 127.0
 | `GET /meta` | self-describing: inputs `frame: image` + `boxes: ndarray`; output `emotions`; plus the class list |
 | `GET /healthz` | readiness + resolved runtime/device |
 | `POST /predict` | multipart: a `frame` image part + a `boxes` `.npy` part → JSON `{outputs, stats}` |
+| `POST /predict_crops` | multipart: one repeated `crops` image part per face → JSON `{outputs, stats}` (avoids re-sending the whole frame) |
+| `WS /stream` | persistent socket: per frame a `{"n":K}` control message + K binary crops → one JSON reply |
 
 ```bash
 curl http://127.0.0.1:8002/meta
@@ -200,15 +202,54 @@ from online_emotion.client import EmotionClient
 
 emo = EmotionClient(
     "http://127.0.0.1:8002",   # the service URL (local or cloud)
-    encode="png",              # how frames go over the wire: "png" (lossless) | "jpeg" (smaller)
+    encode="jpeg",             # wire format (default): "jpeg" (small, no measurable accuracy loss) | "png" (lossless)
+    quality=90,                # JPEG quality (ignored for png)
+    max_side=None,             # if set, downscale frame before sending (predict_on_boxes path); boxes are scaled to match
     timeout=30,                # request timeout, seconds
 )
-res = emo.predict_on_boxes(frame, boxes)   # res.emotions[i].label / .score
-emo.meta()                                 # the service's /meta;  emo.healthz() -> readiness
+res = emo.predict_on_boxes(frame, boxes)              # res.emotions[i].label / .score
+# Or the efficient path — send only the face crops, never the whole frame again:
+res = emo.predict_on_crops(EmotionClient.crop_boxes(frame, boxes))
+emo.meta()                                            # the service's /meta;  emo.healthz() -> readiness
 ```
 
-Compose with a hosted face service into a pipeline by URL — see
-**[../testing-pipeline](../testing-pipeline)** for a ready-to-run example.
+### Performance & efficiency
+
+The HTTP cost is wire encode + transfer + decode + JSON, not the model. Knobs:
+
+| Knob | Effect |
+|------|--------|
+| `encode="jpeg"`, `quality=90` | default; far smaller/faster than PNG with no measurable accuracy loss (crops are resized to 224², smoothing JPEG artifacts) |
+| `predict_on_crops(...)` / `crop_boxes(...)` | send only small face crops instead of the full frame + boxes — payload scales with the number/size of faces, not frame resolution |
+| `predict_on_crops_stream(...)` / `predict_on_boxes_stream(...)` | overlap the hop across frames over keep-alive; results in input order |
+| `EmotionStreamClient(...).predict_stream(crop_lists, max_inflight=K)` | persistent WebSocket `/stream` (crops only); best for remote/WAN |
+
+**Pick a workflow by where the service runs:**
+- **Same device** — use the in-process `EmotionRecognizer` directly (it crops on-device).
+- **LAN** — `EmotionClient(encode="jpeg")` + `predict_on_crops`.
+- **Remote / WAN** — `EmotionStreamClient` over `/stream` with `max_inflight`.
+
+### Composing face → emotion (no combined package)
+
+The two packages stay independent — there is intentionally no combined package; the
+glue is two lines of your code.
+
+```python
+# In-process (same device) — fastest; crops never leave the device:
+from online_face import FaceDetector
+from online_emotion import EmotionRecognizer
+det, emo = FaceDetector("retinaface"), EmotionRecognizer("hsemotion")
+r = det(frame); emotions = emo.predict_on_boxes(frame, r.boxes)
+
+# Over the wire (two services) — send only face crops to emotion, not the frame twice:
+from online_face.client import FaceClient
+from online_emotion.client import EmotionClient
+face, emo = FaceClient(FACE_URL), EmotionClient(EMO_URL)
+r = face(frame)
+emotions = emo.predict_on_crops(EmotionClient.crop_boxes(frame, r.boxes))
+```
+
+See **[../testing-pipeline](../testing-pipeline)** for a ready-to-run example.
 
 ---
 
