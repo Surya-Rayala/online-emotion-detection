@@ -5,8 +5,6 @@ must be scaled DOWN to index the sent frame (inverse of the face direction).
 """
 from __future__ import annotations
 
-import time
-
 import numpy as np
 import pytest
 
@@ -95,25 +93,6 @@ def test_empty_crops_returns_empty_without_posting():
     client = EmotionClient(session=sess)
     res = client.predict_on_crops([])
     assert sess.url is None and len(res.emotions) == 0
-
-
-class _CountSession:
-    """Returns one emotion per crop part; later (bigger) items finish faster."""
-
-    def post(self, url, files=None, timeout=None, **kw):
-        n = len(files)
-        time.sleep(0.02 * ((8 - n) % 8))
-        return _Resp({"outputs": {
-            "emotions": [{"label": "x", "score": 0.5, "label_index": 0}] * n,
-            "classes": []}})
-
-
-def test_predict_on_crops_stream_preserves_input_order():
-    sess = _CountSession()
-    client = EmotionClient(session=sess)
-    crop_lists = [[np.zeros((10, 10, 3), "uint8")] * (i + 1) for i in range(6)]
-    got = list(client.predict_on_crops_stream(crop_lists, max_workers=3))
-    assert [len(r.emotions) for r in got] == [i + 1 for i in range(6)]
 
 
 @pytest.mark.timeout(300)

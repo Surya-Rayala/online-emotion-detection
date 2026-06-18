@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from .. import registry as _registry
-from ..models.hsemotion import class_names, load_hsemotion_module
+from ..models.hsemotion import load_hsemotion_module
 from ..models.hsemotion.labels import AFFECTNET_8
 from .base import ExportSpec, ModelFamily, ResolvedWeights
 
@@ -63,7 +63,10 @@ class HSEmotionFamily(ModelFamily):
         import torch
         import torch.nn.functional as F
 
-        resized = [F.interpolate(c.unsqueeze(0), size=size, mode="bilinear", align_corners=False)
+        # antialias=True matches HSEmotion's torchvision Resize(antialias=True) — important
+        # fidelity to the model's training preprocessing when downscaling large crops.
+        resized = [F.interpolate(c.unsqueeze(0), size=size, mode="bilinear",
+                                 align_corners=False, antialias=True)
                    for c in crops_chw_bgr]
         return self.normalize_batch(torch.cat(resized, dim=0))
 
@@ -97,7 +100,3 @@ class HSEmotionFamily(ModelFamily):
             dynamic_axes={"input": {0: "batch"}, "logits": {0: "batch"}}, opset=13,
             trt_min_batch=1, trt_opt_batch=8, trt_max_batch=32,
         )
-
-    def context_for(self, resolved: ResolvedWeights) -> Dict[str, Any]:
-        return {"classes": class_names(int(resolved.meta.get("classes", 8))),
-                "va": bool(resolved.meta.get("va", False))}

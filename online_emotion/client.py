@@ -33,32 +33,6 @@ class EmotionFrameResult:
         return len(self.emotions)
 
 
-def _pipeline(fn, items, max_workers: int):
-    """Run ``fn`` over ``items`` with up to ``max_workers`` calls in flight, yielding
-    results in input order. Generic over the per-item call (plain HTTP overlap)."""
-    from collections import deque
-    from concurrent.futures import ThreadPoolExecutor
-
-    ex = ThreadPoolExecutor(max_workers=max(1, int(max_workers)))
-    try:
-        it = iter(items)
-        window: deque = deque()
-        for _ in range(max(1, int(max_workers))):
-            try:
-                window.append(ex.submit(fn, next(it)))
-            except StopIteration:
-                break
-        while window:
-            result = window.popleft().result()
-            try:
-                window.append(ex.submit(fn, next(it)))
-            except StopIteration:
-                pass
-            yield result
-    finally:
-        ex.shutdown(wait=False)
-
-
 class EmotionClient:
     """Remote proxy mirroring ``EmotionRecognizer.predict_on_boxes``."""
 
@@ -138,17 +112,6 @@ class EmotionClient:
                                    frame_index: Optional[int] = None) -> EmotionFrameResult:
         """Convenience: crop client-side then call the crops-only endpoint."""
         return self.predict_on_crops(self.crop_boxes(frame, boxes), frame_index=frame_index)
-
-    def predict_on_crops_stream(self, crop_lists, *, max_workers: int = 4):
-        """Overlap the crops-only hop across frames over the pooled Session.
-        Yields EmotionFrameResult in input order."""
-        return _pipeline(self.predict_on_crops, crop_lists, max_workers)
-
-    def predict_on_boxes_stream(self, items, *, max_workers: int = 4,
-                                max_side: Optional[int] = None):
-        """Pipeline ``(frame, boxes)`` pairs via the full-frame ``/predict`` path."""
-        return _pipeline(lambda fb: self.predict_on_boxes(fb[0], fb[1], max_side=max_side),
-                         items, max_workers)
 
     @staticmethod
     def _parse(out: Dict[str, Any]) -> EmotionFrameResult:

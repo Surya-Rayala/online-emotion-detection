@@ -17,14 +17,20 @@ res = emo.predict_on_boxes(frame, boxes)    # res.emotions[i].label / .probs
 
 ## Install
 
+Pick a runtime extra **and** an OpenCV build (`gui` for desktop, `headless` for servers/Docker/Jetson):
+
 ```bash
-pip install "online-emotion-detection[torch]"
+pip install "online-emotion-detection[torch,gui]"        # desktop (enables cv2 windows / --display)
+pip install "online-emotion-detection[torch,headless]"   # servers, Docker, Jetson (no GTK/X11)
 ```
 
-That's all you need for most setups — `[torch]` is the default runtime and pulls the HSEmotion
-model weights; it works on CPU, CUDA, and Mac (MPS). Other backends (`onnx`, `tensorrt`, serving)
-are **optional extras** you can add anytime — see [Install options](#install-options). (Prefer
-`uv`? See [Misc](#misc).)
+`[torch]` is the default runtime (pulls the HSEmotion weights) and works on CPU, CUDA, and Mac (MPS).
+**OpenCV is not bundled by default** — choose `[gui]` (`opencv-python`) or `[headless]`
+(`opencv-python-headless`). On **Jetson** the GUI build pulls X11/GTK and frequently fails to build
+against the CUDA toolchain (`nvcc` errors), so use `[headless]` — or install with **neither** and rely
+on JetPack's system OpenCV (also use JetPack's torch/onnxruntime there). Other backends (`onnx`,
+`tensorrt`, serving, client) are optional extras — see [Install options](#install-options).
+(Prefer `uv`? See [Misc](#misc).)
 
 ---
 
@@ -134,18 +140,21 @@ just adds those packages (it won't reinstall torch). Install several at once:
 
 | Extra | Adds | Install when you want to… |
 |-------|------|---------------------------|
+| `[gui]` | opencv-python | desktop OpenCV (enables `cv2.imshow` / `--display`) |
+| `[headless]` | opencv-python-headless | OpenCV for servers / Docker / Jetson (no GTK/X11) |
 | `[torch]` | torch, torchvision, hsemotion, timm | **default** runtime + model weights |
 | `[onnx]`  | onnxruntime, onnx, onnxsim | run or export the ONNX backend |
 | `[trt]`   | our ONNX export path + fp16 converter (**not** tensorrt) | run the TensorRT backend — install TensorRT yourself first, **see the note below** |
 | `[serve]` | fastapi, uvicorn, python-multipart | host the model as an HTTP service (below) |
-| `[client]` | requests | call a remote service (torch-free, below) |
+| `[client]` | requests, websockets | call a remote service (torch-free, below) |
 
 **Which do I actually need?**
-- `pip install online-emotion-detection` (no `[...]`) → **core only** (numpy/opencv); **no runtime, can't run inference**. Use this only when torch is provided another way (e.g. Jetson/JetPack wheels).
-- `[torch]` → the **foundation**; required to run the model locally (CPU/CUDA/MPS) and it pulls the model weights. Start here.
+- **Always pick an OpenCV build:** `[gui]` (desktop) or `[headless]` (servers/Docker/Jetson). OpenCV is **not** in core, so combine it with a runtime/client extra, e.g. `[torch,gui]` or `[client,headless]`. On Jetson, prefer `[headless]` or rely on JetPack's system OpenCV (install neither).
+- `pip install online-emotion-detection` (no `[...]`) → **core only** (numpy/tqdm); no OpenCV, no runtime — can't run. Use only when OpenCV/torch are provided another way (e.g. JetPack).
+- `[torch]` → the **foundation**; required to run the model locally (CPU/CUDA/MPS) and it pulls the model weights. Start here (e.g. `[torch,gui]`).
 - `[onnx]` / `[trt]` → **add** a backend *on top of* torch (they don't replace it). `[trt]` pulls `[onnx]` + an fp16 converter but **not tensorrt** — install TensorRT for your CUDA yourself (see the note below).
-- `[serve]` → runs the model in-process, so it needs torch too: `pip install "online-emotion-detection[torch,serve]"`.
-- `[client]` → the **only torch-free** one — it just calls a remote service, so `pip install "online-emotion-detection[client]"` **alone is enough**.
+- `[serve]` → runs the model in-process, so it needs torch + an OpenCV build: `pip install "online-emotion-detection[torch,serve,gui]"`.
+- `[client]` → the **only torch-free** path; add an OpenCV build: `pip install "online-emotion-detection[client,headless]"`.
 
 > [!CAUTION]
 > **TensorRT setup.** `[trt]` adds our ONNX export path + fp16 converter but **does not install TensorRT** — its PyPI wheel always grabs the newest CUDA build (e.g. cu13), which won't match your system. Install TensorRT yourself (plus a matching CUDA build of torch). On an NVIDIA machine:
@@ -192,10 +201,10 @@ online-emotion-serve --model hsemotion --device auto --runtime auto --host 127.0
 curl http://127.0.0.1:8002/meta
 ```
 
-### Client — `[client]` proxy (torch-free: numpy/opencv + requests + websockets)
+### Client — `[client]` proxy (torch-free: numpy + requests + websockets, plus an OpenCV build)
 
 ```bash
-pip install "online-emotion-detection[client]"
+pip install "online-emotion-detection[client,headless]"   # servers/Jetson; use [client,gui] on desktop
 ```
 
 ```python
@@ -210,24 +219,45 @@ emo = EmotionClient(
 )
 ```
 
-| Function | What it does | Use when |
-|----------|--------------|----------|
-| `emo.predict_on_boxes(frame, boxes, max_side=…)` | sends the **whole frame** + boxes; server crops | you already have the frame at the service and want the simplest call |
-| `EmotionClient.crop_boxes(frame, boxes)` → `emo.predict_on_crops(crops)` | sends **only the small face crops** (payload scales with #faces, not resolution) | the efficient default for remote/LAN; avoids re-sending the whole frame |
-| `emo.predict_on_crops_stream(crop_lists, max_workers=K)` / `emo.predict_on_boxes_stream(items, max_workers=K)` | **K requests in flight** over keep-alive HTTP; yields results **in input order** | one stream over a network where round-trip latency would stall you |
-| `EmotionStreamClient(url, max_inflight=K).predict_stream(crop_lists)` (or `.predict_on_boxes_stream((frame, boxes) pairs)`) | same, over a **persistent WebSocket** `/stream` | one long-lived/remote stream; lowest per-frame overhead |
-| `emo.healthz()` / `emo.meta()` | readiness / service contract (incl. class list) | startup checks |
+There are exactly **two** client tools — pick by workload:
 
-`crop_boxes` is a static helper (pure numpy slicing); each result list maps **crop i → emotion i**. `encode="jpeg"` (default) is far smaller than PNG with no measurable accuracy loss (crops are resized to 224²).
+| Tool | What it does | Use when |
+|------|--------------|----------|
+| **`EmotionClient`** (unary) — `predict_on_boxes(frame, boxes)` or `predict_on_crops(EmotionClient.crop_boxes(frame, boxes))` | one request per call; crops-only avoids re-sending the whole frame (payload scales with #faces). Also `healthz()`/`meta()` | one-offs, or a fresh connection per call |
+| **`EmotionStream`** (async, long-lived) — `await s.push_boxes(frame, boxes, meta)` (or `push_crops`) + `async for result, meta in s.results()` | holds WebSockets across a **pool of endpoints**, results **as completed (out of order)** tagged with metadata; auto-scales to a target fps/latency | continuous / many streams over a network |
 
-### Single stream vs many streams (where `K` workers matter)
+`crop_boxes` is a static helper (pure numpy slicing); each result maps **crop i → emotion i**. `encode="jpeg"` (default) is far smaller than PNG with no measurable accuracy loss (crops are resized to 224²).
 
-The server is **single-process, single-model** (`workers=1`): it accepts many connections at once, but inference runs **sequentially** on one device. So:
+**What you get back** — an `EmotionFrameResult`:
 
-- **Same device** — skip HTTP; call the in-process `EmotionRecognizer` directly (it crops on-device).
-- **One stream, same host / LAN** — plain `emo.predict_on_crops(...)`; the keep-alive `Session` pools the connection. `K=1` is enough.
-- **One stream, remote (RTT-bound)** — use the `*_stream` methods or `EmotionStreamClient` with **`K ≈ round-trip-time ÷ per-frame server time`, capped ~2–4**, to keep the sequential server busy during the network hop. Higher won't help.
-- **Many simultaneous streams** — one client/connection **per stream**, run concurrently from your app; keep each stream's `K` small (1–2). Aggregate throughput is bounded by the one model — scale past it with **multiple server instances** (one per GPU / replicas behind a balancer), sharding streams across them.
+| field | type | meaning |
+|---|---|---|
+| `emotions` | `list[EmotionResult]` | one per input crop/box, **in input order** |
+| `classes` | `tuple[str, …]` | the class label set (7- or 8-class AffectNet) |
+
+Each **client** `EmotionResult` has: `label` (str), `score` (float, top-1 probability), `label_index` (int), `valence`/`arousal` (floats, only for `*_va_mtl` weights, else `None`). `len(result)` == number of faces. `EmotionClient` returns one `EmotionFrameResult`; `EmotionStream.results()` yields `(EmotionFrameResult, meta)`.
+
+> Note: the in-process `EmotionRecognizer` returns the **full** softmax vector as `EmotionResult.probs` `(C,)` (plus `classes`, `frame_index`); the wire **client** sends only the top-1 `score` to keep payloads small.
+
+### `EmotionStream` — continuous, multi-stream, auto-scaling
+
+```python
+import asyncio
+from online_emotion import EmotionStream
+
+async def run(items):  # items yield (frame, boxes, info)
+    async with EmotionStream(["http://gpu0:8002"], target_fps=30,
+                             target_latency_ms=150, max_inflight=64) as s:
+        async def pump():
+            for frame, boxes, info in items:
+                await s.push_boxes(frame, boxes, meta=info)   # crops client-side; sends only crops
+            await s.aclose()
+        asyncio.create_task(pump())
+        async for result, info in s.results():                 # out of order; pair by `info`
+            handle(info, result)
+```
+
+Same adaptive controller as the face package: ramps in-flight while latency stays under target, backs off when the server's queue grows (model-bound) or latency breaches; scales across a URL **pool** when given one. Same device? Use the in-process `EmotionRecognizer` (it crops on-device).
 
 ### Composing face → emotion (no combined package)
 
@@ -254,10 +284,10 @@ emotions = emo.predict_on_crops(EmotionClient.crop_boxes(frame, r.boxes))
 
 ### Install with uv
 
-Same as pip, with `uv`:
+Same as pip, with `uv` (include an OpenCV build — `gui` or `headless`):
 ```bash
-uv add "online-emotion-detection[torch]"            # into a uv project
-uv pip install "online-emotion-detection[torch]"    # into the active venv
+uv add "online-emotion-detection[torch,gui]"            # into a uv project
+uv pip install "online-emotion-detection[torch,headless]"    # into the active venv
 ```
 
 ### Jetson (JetPack)

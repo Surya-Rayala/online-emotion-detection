@@ -141,5 +141,6 @@ def crop_resize(img_chw, boxes_xyxy, size: Tuple[int, int]):
         crop = img_chw[:, y1:y2, x1:x2]
         if crop.shape[0] == 1:
             crop = crop.repeat(3, 1, 1)
-        out[i] = F.interpolate(crop.unsqueeze(0), size=(th, tw), mode="bilinear", align_corners=False)[0]
+        out[i] = F.interpolate(crop.unsqueeze(0), size=(th, tw), mode="bilinear",
+                               align_corners=False, antialias=True)[0]
     return out

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "online-emotion-detection"
-version = "0.2.1"
+version = "0.3.0"
 description = "Streaming, frame-by-frame facial emotion recognition (HSEmotion) with a unified torch/torchscript/onnx/trt runtime and export-once caching for edge devices."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -26,11 +26,19 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.23",
-    "opencv-python>=4.7",
     "tqdm>=4.65",
 ]
+# NOTE: OpenCV is intentionally NOT a core dependency. Pick a build via an extra:
+#   [gui]      -> opencv-python (desktop; enables cv2.imshow / --display windows)
+#   [headless] -> opencv-python-headless (servers, Docker, Jetson; no GTK/X11/GUI deps)
+# On Jetson, the GUI build pulls X11/GTK and often fails to build against the CUDA
+# toolchain (nvcc errors); use [headless], or install NEITHER and rely on JetPack's
+# system OpenCV. The code works with whichever provides ``cv2``.
 
 [project.optional-dependencies]
+# OpenCV build — choose exactly one (or use a system cv2 on Jetson).
+gui = ["opencv-python>=4.7"]
+headless = ["opencv-python-headless>=4.7"]
 # The default runtime + the HSEmotion model source. Install this unless on Jetson.
 torch = ["torch>=2.1", "torchvision>=0.16", "hsemotion>=0.3", "timm>=0.9"]
 onnx = ["onnxruntime>=1.16", "onnx>=1.15", "onnxsim>=0.4.33"]
@@ -39,8 +47,8 @@ onnx = ["onnxruntime>=1.16", "onnx>=1.15", "onnxsim>=0.4.33"]
 trt = ["online-emotion-detection[onnx]", "onnxconverter-common>=1.13"]
 # Host the model over HTTP (uniform contract). Adds no torch beyond the runtime extra.
 serve = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9"]
-# Talk to a remote service. Torch-free: numpy/opencv (core) + requests + websockets.
-# requests powers the unary/pipelined clients; websockets powers EmotionStreamClient.
+# Talk to a remote service. Torch-free: numpy + requests + websockets (add [gui] or [headless] for cv2).
+# requests powers the unary EmotionClient; websockets powers the async EmotionStream session.
 client = ["requests>=2.31", "websockets>=12"]
 dev = ["pytest>=7.4", "ruff>=0.4", "mypy>=1.8"]
 

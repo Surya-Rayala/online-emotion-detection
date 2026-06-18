@@ -37,11 +37,30 @@ def load_hsemotion_module(model_name: str):
         rec = HSEmotionRecognizer(model_name=model_name, device="cpu")
     finally:
         torch.load = _orig_load
-    model = getattr(rec, "model", None)
-    if model is None:  # pragma: no cover - guard against upstream API drift
+    feat = getattr(rec, "model", None)
+    if feat is None:  # pragma: no cover - guard against upstream API drift
         raise RuntimeUnavailableError("could not extract the torch module from HSEmotionRecognizer")
-    _patch_timm_drift(model)
-    return model.eval()
+    _patch_timm_drift(feat)
+    feat.eval()
+
+    # CRITICAL: HSEmotionRecognizer sets ``model.classifier = Identity()`` and applies the
+    # real classifier separately (numpy ``get_probab``), so ``rec.model`` only emits the
+    # backbone FEATURE vector (e.g. 1280-d), NOT emotion logits. Re-attach the saved
+    # classifier head so the module outputs logits end-to-end (and exports correctly).
+    W = getattr(rec, "classifier_weights", None)
+    b = getattr(rec, "classifier_bias", None)
+    if W is None or b is None:  # upstream kept the head on the model (older API) -> use as-is
+        return feat
+    import numpy as np
+    import torch.nn as nn
+
+    W = np.asarray(W)
+    b = np.asarray(b)
+    head = nn.Linear(int(W.shape[1]), int(W.shape[0]))
+    with torch.no_grad():
+        head.weight.copy_(torch.from_numpy(W).float())
+        head.bias.copy_(torch.from_numpy(b).float())
+    return nn.Sequential(feat, head).eval()
 
 
 def _patch_timm_drift(model) -> None:

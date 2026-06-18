@@ -29,8 +29,11 @@ _OUTPUTS = [{"name": "emotions", "type": "json"}]
 
 def create_app(model: str = "hsemotion", *, weights=None, runtime: str = "auto",
                device: str = "auto", precision: str = "auto", batch_max: int = 32,
-               input_size=None):
+               input_size=None, stream_queue: int = 32):
     """Build a FastAPI app wrapping one eagerly-constructed ``EmotionRecognizer``."""
+    import asyncio
+    import time
+
     from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import JSONResponse
     from starlette.concurrency import run_in_threadpool
@@ -53,7 +56,7 @@ def create_app(model: str = "hsemotion", *, weights=None, runtime: str = "auto",
                 "inputs": _INPUTS, "outputs": _OUTPUTS, "classes": list(emo.classes),
                 # /predict_crops takes pre-cropped face images directly (one repeated
                 # "crops" image part each) — avoids sending the full frame a second time.
-                "paths": ["/predict", "/predict_crops"]}
+                "paths": ["/predict", "/predict_crops"], "stream_protocol": 2}
 
     def _emotions_payload(res) -> list:
         return [{"label": e.label, "score": float(e.probs.max()),
@@ -108,23 +111,48 @@ def create_app(model: str = "hsemotion", *, weights=None, runtime: str = "auto",
 
     @app.websocket("/stream")
     async def stream(ws: WebSocket):
-        """Persistent crops path: per frame, a JSON control message ``{"n": K}``
-        then K binary crop messages; the reply is one JSON ``{"outputs": {...}}``.
-        FIFO replies; inference runs in a threadpool so it never blocks the loop."""
+        """Stream protocol v2 — pipelined, id-tagged, with server telemetry.
+
+        Per frame the client sends a text control message ``{"id", "n":K, "fmt"}``
+        then K binary crop messages. The reply is one JSON ``{"id", "outputs",
+        "server": {infer_ms, queue_depth, t_recv, t_send}}``. A receive loop drains
+        into a bounded queue (backpressure) while a worker runs inference in a
+        threadpool. Replies carry the id, so the client matches without ordering."""
         await ws.accept()
-        try:
+        q: asyncio.Queue = asyncio.Queue(maxsize=max(1, int(stream_queue)))
+
+        async def receiver():
             while True:
-                ctrl = await ws.receive_json()
+                ctrl = await ws.receive_json()              # {"id", "n", "fmt"}
                 k = int(ctrl.get("n", 0))
                 crops = [_wire.decode_image(await ws.receive_bytes()) for _ in range(k)]
-                if crops:
-                    res = await run_in_threadpool(emo, crops)
-                    payload = {"emotions": _emotions_payload(res), "classes": list(res.classes)}
-                else:
-                    payload = {"emotions": [], "classes": list(emo.classes)}
-                await ws.send_json({"outputs": payload})
+                await q.put((ctrl, crops, time.perf_counter()))
+
+        async def worker():
+            while True:
+                ctrl, crops, t_recv = await q.get()
+                try:
+                    t0 = time.perf_counter()
+                    if crops:
+                        res = await run_in_threadpool(emo, crops)
+                        payload = {"emotions": _emotions_payload(res), "classes": list(res.classes)}
+                    else:
+                        payload = {"emotions": [], "classes": list(emo.classes)}
+                    infer_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+                    await ws.send_json({"id": ctrl.get("id"), "outputs": payload,
+                                        "server": {"infer_ms": infer_ms, "queue_depth": q.qsize(),
+                                                   "t_recv": t_recv, "t_send": time.perf_counter()}})
+                finally:
+                    q.task_done()
+
+        tasks = [asyncio.ensure_future(receiver()), asyncio.ensure_future(worker())]
+        try:
+            await asyncio.gather(*tasks)
         except WebSocketDisconnect:
-            return
+            pass
+        finally:
+            for t in tasks:
+                t.cancel()
 
     return app
 
@@ -141,12 +169,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--precision", default="auto", choices=["auto", "fp32", "fp16", "int8"])
     p.add_argument("--batch-max", type=int, default=32)
     p.add_argument("--input-size", type=int, default=None)
+    p.add_argument("--stream-queue", type=int, default=32,
+                   help="max frames buffered per /stream connection (backpressure bound)")
     args = p.parse_args(argv)
 
     import uvicorn
 
     app = create_app(args.model, weights=args.weights, runtime=args.runtime, device=args.device,
-                     precision=args.precision, batch_max=args.batch_max, input_size=args.input_size)
+                     precision=args.precision, batch_max=args.batch_max, input_size=args.input_size,
+                     stream_queue=args.stream_queue)
     uvicorn.run(app, host=args.host, port=args.port, workers=1, log_level="info")
     return 0
 
