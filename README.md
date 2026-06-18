@@ -242,22 +242,43 @@ Each **client** `EmotionResult` has: `label` (str), `score` (float, top-1 probab
 ### `EmotionStream` — continuous, multi-stream, auto-scaling
 
 ```python
-import asyncio
+import asyncio, time
 from online_emotion import EmotionStream
 
-async def run(items):  # items yield (frame, boxes, info)
-    async with EmotionStream(["http://gpu0:8002"], target_fps=30,
-                             target_latency_ms=150, max_inflight=64) as s:
-        async def pump():
-            for frame, boxes, info in items:
-                await s.push_boxes(frame, boxes, meta=info)   # crops client-side; sends only crops
-            await s.aclose()
+async def run(items):
+    # `items` yields (frame, boxes, meta). `meta` is ANY object you choose — it is NOT sent to
+    # the server; it's kept client-side and returned with that frame's result so YOU can tell
+    # which output is which (e.g. meta = {"stream": cam_id, "i": frame_index, "t": time.time()}).
+    async with EmotionStream(
+        ["http://gpu0:8002"],     # a single URL, or a POOL of replicas/GPUs
+        target_fps=30,            # controller aims for this throughput…
+        target_latency_ms=150,    # …while keeping end-to-end latency under this
+        max_inflight=64,          # ceiling on frames in flight across the pool
+    ) as stream:
+
+        async def pump():                                  # producer: push (frame, boxes) in
+            for frame, boxes, meta in items:               # boxes: (N,4) xyxy from a face detector
+                await stream.push_boxes(frame, boxes, meta=meta)  # crops client-side; sends only crops
+            await stream.aclose()                          # end-of-stream (drains in-flight first)
         asyncio.create_task(pump())
-        async for result, info in s.results():                 # out of order; pair by `info`
-            handle(info, result)
+
+        # consumer: results arrive AS COMPLETED — i.e. OUT OF ORDER. Each item is a 2-tuple:
+        #     (result: EmotionFrameResult, meta)   # `meta` is exactly the object you pushed
+        # Identify / reassemble using `meta` — never assume arrival order == push order.
+        async for result, meta in stream.results():
+            cam, idx = meta["stream"], meta["i"]           # <- how you know which frame this is
+            # result.emotions -> list[EmotionResult], one per box, IN BOX ORDER (crop i -> emotion i)
+            # result.classes  -> tuple[str, …]  the label set
+            for box_i, e in enumerate(result.emotions):    # e.label / e.score / e.label_index / e.valence / e.arousal
+                handle(cam, idx, box_i, e.label, e.score)
+            # stream.stats() -> live dict: {conns, target_inflight, rtt_ms, infer_ms, queue_depth, bound, ...}
 ```
 
 Same adaptive controller as the face package: ramps in-flight while latency stays under target, backs off when the server's queue grows (model-bound) or latency breaches; scales across a URL **pool** when given one. Same device? Use the in-process `EmotionRecognizer` (it crops on-device).
+
+---
+
+## Misc
 
 ### Composing face → emotion (no combined package)
 
@@ -277,10 +298,6 @@ face, emo = FaceClient(FACE_URL), EmotionClient(EMO_URL)
 r = face(frame)
 emotions = emo.predict_on_crops(EmotionClient.crop_boxes(frame, r.boxes))
 ```
-
----
-
-## Misc
 
 ### Install with uv
 
