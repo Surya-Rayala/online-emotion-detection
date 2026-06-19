@@ -190,10 +190,14 @@ online-emotion-serve --model hsemotion --device auto --runtime auto --host 127.0
 `--batch-max 32` · `--input-size N` · `--host 127.0.0.1` · `--port 8002`.
 
 `--instances` runs a pool of N recognizers so concurrent requests overlap (each runs in a worker
-thread). Pass a number (`--instances 4`) or a per-GPU map (`--instances cuda:0=2,cuda:1=1`) to pin
-instances to specific GPUs. On a **single** device the N copies just time-share it (N× memory for
-little gain) — multi-instance mainly helps across **multiple GPUs**; the threadpool overlap helps
-regardless. `/meta` reports the resolved `instances` and `instance_devices`.
+thread). A plain number (`--instances 4`) is **round-robined across all visible GPUs**
+(`cuda:0, cuda:1, …`) when more than one is present — regardless of which single device the server
+itself resolved to (`--device auto` just picks `cuda:0` as the main device; the pool still spreads
+across `0..k-1`). If there is only **one** device (single GPU / MPS / CPU) all N copies share it
+(N× memory, time-sharing the same compute, so little gain). A per-GPU map
+(`--instances cuda:0=2,cuda:1=1`) instead pins exact counts to specific GPUs. So multi-instance
+mainly helps across **multiple GPUs**; the threadpool overlap helps regardless. `/meta` reports the
+resolved `instances` and `instance_devices`.
 
 | Route | What it does |
 |-------|--------------|
