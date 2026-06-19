@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 __all__ = ["EmotionRecognizer", "EmotionResult", "EmotionFrameResult",
-           "EmotionClient", "EmotionStream",
+           "EmotionClient", "EmotionStream", "annotate",
            "available_models", "available_weights", "__version__"]
 
 
@@ -39,6 +39,10 @@ def __getattr__(name: str):
         from .registry import available_weights
 
         return available_weights
+    if name == "annotate":
+        from ._annotate import annotate
+
+        return annotate
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

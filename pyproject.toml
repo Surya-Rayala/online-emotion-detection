@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "online-emotion-detection"
-version = "0.3.2"
+version = "0.3.3"
 description = "Streaming, frame-by-frame facial emotion recognition (HSEmotion) with a unified torch/torchscript/onnx/trt runtime and export-once caching for edge devices."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"

@@ -186,12 +186,18 @@ online-emotion-serve --model hsemotion --device auto --runtime auto --host 127.0
 
 **Server flags** (all optional; defaults shown): `--model hsemotion` ·
 `--weights KEY|PATH` (default: family default) · `--device {auto,cpu,cuda,mps}` ·
-`--runtime {auto,torch,torchscript,onnx,trt}` · `--precision {auto,fp32,fp16,int8}` ·
+`--instances 1` · `--runtime {auto,torch,torchscript,onnx,trt}` · `--precision {auto,fp32,fp16,int8}` ·
 `--batch-max 32` · `--input-size N` · `--host 127.0.0.1` · `--port 8002`.
+
+`--instances` runs a pool of N recognizers so concurrent requests overlap (each runs in a worker
+thread). Pass a number (`--instances 4`) or a per-GPU map (`--instances cuda:0=2,cuda:1=1`) to pin
+instances to specific GPUs. On a **single** device the N copies just time-share it (N× memory for
+little gain) — multi-instance mainly helps across **multiple GPUs**; the threadpool overlap helps
+regardless. `/meta` reports the resolved `instances` and `instance_devices`.
 
 | Route | What it does |
 |-------|--------------|
-| `GET /meta` | self-describing: inputs `frame: image` + `boxes: ndarray`; output `emotions`; plus the class list |
+| `GET /meta` | self-describing: inputs `frame: image` + `boxes: ndarray`; output `emotions`; plus the class list, `instances`/`instance_devices` |
 | `GET /healthz` | readiness + resolved runtime/device |
 | `POST /predict` | multipart: a `frame` image part + a `boxes` `.npy` part → JSON `{outputs, stats}` |
 | `POST /predict_crops` | multipart: one repeated `crops` image part per face → JSON `{outputs, stats}` (avoids re-sending the whole frame) |
